@@ -506,8 +506,15 @@ retry_wait(Q = #amqqueue{pid = QPid, name = Name, state = QState}, F, E, Retries
         {stopped, false} ->
             E({absent, Q, stopped});
         _ ->
-            false = rabbit_mnesia:is_process_alive(QPid),
-            timer:sleep(30),
+            case rabbit_mnesia:is_process_alive(QPid) of
+                true ->
+                    % rabbitmq-server#1682 - No need to sleep if the
+                    % queue process has become active in the time between
+                    % the case statement above (in with/4) and now
+                    ok;
+                false ->
+                    timer:sleep(30)
+            end,
             with(Name, F, E, RetriesLeft - 1)
     end.
 
