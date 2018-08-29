@@ -505,7 +505,7 @@ retry_wait(Q = #amqqueue{pid = QPid, name = Name, state = QState}, F, E, Retries
         %% there are no slaves to migrate to
         {stopped, false} ->
             E({absent, Q, stopped});
-        _ ->
+        {_, true} ->
             case rabbit_mnesia:is_process_alive(QPid) of
                 true ->
                     % rabbitmq-server#1682 - No need to sleep if the
@@ -515,7 +515,17 @@ retry_wait(Q = #amqqueue{pid = QPid, name = Name, state = QState}, F, E, Retries
                 false ->
                     timer:sleep(30)
             end,
-            with(Name, F, E, RetriesLeft - 1)
+            with(Name, F, E, RetriesLeft - 1);
+        _ ->
+            case rabbit_mnesia:is_process_alive(QPid) of
+                true ->
+                    % rabbitmq-server#1682 - absent & alive is weird,
+                    % but better than crashing with badmatch,true
+                    E({absent, Q, alive});
+                false ->
+                    timer:sleep(30),
+                    with(Name, F, E, RetriesLeft - 1)
+            end
     end.
 
 with(Name, F) -> with(Name, F, fun (E) -> {error, E} end).
