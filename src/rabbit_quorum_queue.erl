@@ -538,7 +538,7 @@ find_quorum_queues(VHost) ->
               qlc:e(qlc:q([Q || Q <- mnesia:table(rabbit_durable_queue),
                                 ?amqqueue_is_quorum(Q),
                                 amqqueue:get_vhost(Q) =:= VHost,
-                                qnode(amqqueue:get_pid(Q)) =:= Node]))
+                                amqqueue:runs_on_node(Q, Node)]))
       end).
 
 i(name,        Q) when ?is_amqqueue(Q) -> amqqueue:get_name(Q);
@@ -674,11 +674,6 @@ quorum_ctag(Other) ->
 
 maybe_send_reply(_ChPid, undefined) -> ok;
 maybe_send_reply(ChPid, Msg) -> ok = rabbit_channel:send_command(ChPid, Msg).
-
-qnode(QPid) when is_pid(QPid) ->
-    node(QPid);
-qnode({_, Node}) ->
-    Node.
 
 check_invalid_arguments(QueueName, Args) ->
     Keys = [<<"x-expires">>, <<"x-message-ttl">>, <<"x-max-length">>,

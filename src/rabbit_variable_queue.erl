@@ -2952,8 +2952,8 @@ list_persistent_queues() ->
     mnesia:async_dirty(
       fun () ->
               qlc:e(qlc:q([Q || Q <- mnesia:table(rabbit_durable_queue),
-                                ?is_amqqueue(Q),
-                                node(amqqueue:get_pid(Q)) =:= Node,
+                                ?amqqueue_is_classic(Q),
+                                amqqueue:runs_on_node(Q, Node),
                                 mnesia:read(rabbit_queue, amqqueue:get_name(Q), read) =:= []]))
       end).
 

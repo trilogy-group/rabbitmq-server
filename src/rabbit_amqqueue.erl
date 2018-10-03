@@ -258,7 +258,7 @@ recover_classic_queues(VHost, Queues) ->
     end.
 
 filter_per_type(Queues) ->
-    lists:partition(fun(Q) -> amqqueue:get_type(Q) == classic end, Queues).
+    lists:partition(fun(Q) -> amqqueue:is_classic(Q) end, Queues).
 
 filter_pid_per_type(QPids) ->
     lists:partition(fun(QPid) -> is_pid(QPid) end, QPids).
@@ -294,15 +294,15 @@ find_durable_queues(VHost) ->
       fun () ->
               qlc:e(qlc:q([Q || Q <- mnesia:table(rabbit_durable_queue),
                                 amqqueue:get_vhost(Q) =:= VHost,
-                                (amqqueue:get_type(Q) == classic andalso
-                                      (is_local_to_node(amqqueue:get_pid(Q), Node) andalso
+                                (amqqueue:is_classic(Q) andalso
+                                      (amqqueue:runs_on_node(Q, Node) andalso
                                        %% Terminations on node down will not remove the rabbit_queue
                                        %% record if it is a mirrored queue (such info is now obtained from
                                        %% the policy). Thus, we must check if the local pid is alive
                                        %% - if the record is present - in order to restart.
                                              (mnesia:read(rabbit_queue, amqqueue:get_name(Q), read) =:= []
                                               orelse not rabbit_mnesia:is_process_alive(amqqueue:get_pid(Q)))))
-                                    orelse (amqqueue:get_type(Q) == quorum andalso lists:member(Node, amqqueue:get_quorum_nodes(Q)))
+                                    orelse (amqqueue:is_quorum(Q) andalso lists:member(Node, amqqueue:get_quorum_nodes(Q)))
                           ]))
       end).
 
@@ -311,15 +311,15 @@ find_durable_queues() ->
     mnesia:async_dirty(
       fun () ->
               qlc:e(qlc:q([Q || Q <- mnesia:table(rabbit_durable_queue),
-                                (amqqueue:get_type(Q) == classic andalso
-                                      (is_local_to_node(amqqueue:get_pid(Q), Node) andalso
+                                (amqqueue:is_classic(Q) andalso
+                                      (amqqueue:runs_on_node(Q, Node) andalso
                                        %% Terminations on node down will not remove the rabbit_queue
                                        %% record if it is a mirrored queue (such info is now obtained from
                                        %% the policy). Thus, we must check if the local pid is alive
                                        %% - if the record is present - in order to restart.
                                              (mnesia:read(rabbit_queue, amqqueue:get_name(Q), read) =:= []
                                               orelse not rabbit_mnesia:is_process_alive(amqqueue:get_pid(Q)))))
-                                    orelse (amqqueue:get_type(Q) == quorum andalso lists:member(Node, amqqueue:get_quorum_nodes(Q)))
+                                    orelse (amqqueue:is_quorum(Q) andalso lists:member(Node, amqqueue:get_quorum_nodes(Q)))
                           ]))
       end).
 
@@ -354,13 +354,12 @@ declare(QueueName = #resource{virtual_host = VHost}, Durable, AutoDelete, Args,
                       Type),
     Q = rabbit_queue_decorator:set(
           rabbit_policy:set(Q0)),
+    do_declare(Q, Node).
 
-    case Type of
-        classic ->
-            declare_classic_queue(Q, Node);
-        quorum ->
-            rabbit_quorum_queue:declare(Q)
-    end.
+do_declare(Q, Node) when ?amqqueue_is_classic(Q) ->
+    declare_classic_queue(Q, Node);
+do_declare(Q, _Node) when ?amqqueue_is_quorum(Q) ->
+    rabbit_quorum_queue:declare(Q).
 
 declare_classic_queue(Q, Node) ->
     QName = amqqueue:get_name(Q),
@@ -715,23 +714,13 @@ list_names() -> mnesia:dirty_all_keys(rabbit_queue).
 
 list_local_names() ->
     [ amqqueue:get_name(Q) || Q <- list(),
-           amqqueue:get_state(Q) =/= crashed, is_local_to_node(amqqueue:get_pid(Q), node())].
+           amqqueue:get_state(Q) =/= crashed, amqqueue:runs_on_node(Q, node())].
 
 list_local_followers() ->
     [ amqqueue:get_name(Q)
       || Q <- list(),
-         amqqueue:get_type(Q) == quorum,
+         amqqueue:is_quorum(Q),
          amqqueue:get_state(Q) =/= crashed, amqqueue:get_leader(Q) =/= node(), lists:member(node(), amqqueue:get_quorum_nodes(Q))].
-
-is_local_to_node(QPid, Node) when is_pid(QPid) ->
-    Node =:= node(QPid);
-is_local_to_node({_, Leader}, Node) ->
-    Node =:= Leader.
-
-qnode(QPid) when is_pid(QPid) ->
-    node(QPid);
-qnode({_, Node}) ->
-    Node.
 
 list(VHostPath) ->
     list(VHostPath, rabbit_queue).
@@ -791,17 +780,17 @@ is_unresponsive(Q, Timeout) ->
             true
     end.
 
-format(Q) when ?amqqueue_type_is(Q, quorum) -> rabbit_quorum_queue:format(Q);
+format(Q) when ?amqqueue_is_quorum(Q) -> rabbit_quorum_queue:format(Q);
 format(_) -> [].
 
-info(Q) when ?amqqueue_type_is(Q, quorum) -> rabbit_quorum_queue:info(Q);
+info(Q) when ?amqqueue_is_quorum(Q) -> rabbit_quorum_queue:info(Q);
 info(Q) when ?amqqueue_state_is(Q, crashed) -> info_down(Q, crashed);
 info(Q) when ?amqqueue_state_is(Q, stopped) -> info_down(Q, stopped);
 info(Q) ->
     QPid = amqqueue:get_pid(Q),
     delegate:invoke(QPid, {gen_server2, call, [info, infinity]}).
 
-info(Q, Items) when ?amqqueue_type_is(Q, quorum) ->
+info(Q, Items) when ?amqqueue_is_quorum(Q) ->
     rabbit_quorum_queue:info(Q, Items);
 info(Q, Items) when ?amqqueue_state_is(Q, crashed) ->
     info_down(Q, Items, crashed);
@@ -872,8 +861,8 @@ info_local(VHostPath) ->
     map(list_local(VHostPath), fun (Q) -> info(Q, [name]) end).
 
 list_local(VHostPath) ->
-    [ Q || Q <- list(VHostPath),
-           amqqueue:get_state(Q) =/= crashed, is_local_to_node(amqqueue:get_pid(Q), node()) ].
+    [Q || Q <- list(VHostPath),
+          amqqueue:get_state(Q) =/= crashed, amqqueue:runs_on_node(Q, node())].
 
 force_event_refresh(Ref) ->
     [gen_server2:cast(amqqueue:get_pid(Q),
@@ -914,7 +903,7 @@ get_queue_consumer_info(Q, ConsumerInfoKeys) ->
                 AckRequired, Prefetch, Args]) ||
         {ChPid, CTag, AckRequired, Prefetch, Args, _} <- consumers(Q)].
 
-stat(Q) when ?amqqueue_type_is(Q, quorum) -> rabbit_quorum_queue:stat(Q);
+stat(Q) when ?amqqueue_is_quorum(Q) -> rabbit_quorum_queue:stat(Q);
 stat(Q) -> delegate:invoke(amqqueue:get_pid(Q), {gen_server2, call, [stat, infinity]}).
 
 pid_of(Q) -> amqqueue:get_pid(Q).
@@ -935,7 +924,7 @@ delete_immediately(QPids) ->
     ok.
 
 delete(Q,
-       IfUnused, IfEmpty, ActingUser) when ?amqqueue_type_is(Q, quorum) ->
+       IfUnused, IfEmpty, ActingUser) when ?amqqueue_is_quorum(Q) ->
     rabbit_quorum_queue:delete(Q, IfUnused, IfEmpty, ActingUser);
 delete(Q, IfUnused, IfEmpty, ActingUser) ->
     case wait_for_promoted_or_stopped(Q) of
@@ -998,8 +987,7 @@ delete_crashed(Q) ->
     delete_crashed(Q, ?INTERNAL_USER).
 
 delete_crashed(Q, ActingUser) ->
-    QPid = amqqueue:get_pid(Q),
-    ok = rpc:call(qnode(QPid), ?MODULE, delete_crashed_internal, [Q, ActingUser]).
+    ok = rpc:call(amqqueue:qnode(Q), ?MODULE, delete_crashed_internal, [Q, ActingUser]).
 
 delete_crashed_internal(Q, ActingUser) ->
     QName = amqqueue:get_name(Q),
@@ -1007,10 +995,10 @@ delete_crashed_internal(Q, ActingUser) ->
     BQ:delete_crashed(Q),
     ok = internal_delete(QName, ActingUser).
 
-purge(Q) when ?amqqueue_type_is(Q, classic) ->
+purge(Q) when ?amqqueue_is_classic(Q) ->
     QPid = amqqueue:get_pid(Q),
     delegate:invoke(QPid, {gen_server2, call, [purge, infinity]});
-purge(Q) when ?amqqueue_type_is(Q, quorum) ->
+purge(Q) when ?amqqueue_is_quorum(Q) ->
     NodeId = amqqueue:get_pid(Q),
     rabbit_quorum_queue:purge(NodeId).
 
@@ -1079,11 +1067,11 @@ credit(Q, ChPid, CTag, Credit, Drain) ->
     delegate:invoke_no_result(QPid, {gen_server2, cast, [{credit, ChPid, CTag, Credit, Drain}]}).
 
 basic_get(Q, ChPid, NoAck, LimiterPid, _CTag, _)
-  when ?amqqueue_type_is(Q, classic) ->
+  when ?amqqueue_is_classic(Q) ->
     QPid = amqqueue:get_pid(Q),
     delegate:invoke(QPid, {gen_server2, call, [{basic_get, ChPid, NoAck, LimiterPid}, infinity]});
 basic_get(Q, _ChPid, NoAck, _LimiterPid, CTag, FStates)
-  when ?amqqueue_type_is(Q, quorum) ->
+  when ?amqqueue_is_quorum(Q) ->
     {Name, _} = Id = amqqueue:get_pid(Q),
     QName = amqqueue:get_name(Q),
     FState0 = get_quorum_state(Id, QName, FStates),
@@ -1101,7 +1089,7 @@ basic_get(Q, _ChPid, NoAck, _LimiterPid, CTag, FStates)
 basic_consume(Q, NoAck, ChPid, LimiterPid,
               LimiterActive, ConsumerPrefetchCount, ConsumerTag,
               ExclusiveConsume, Args, OkMsg, ActingUser, QState)
-  when ?amqqueue_type_is(Q, classic) ->
+  when ?amqqueue_is_classic(Q) ->
     QPid = amqqueue:get_pid(Q),
     QName = amqqueue:get_name(Q),
     ok = check_consume_arguments(QName, Args),
@@ -1117,7 +1105,7 @@ basic_consume(Q, NoAck, ChPid, LimiterPid,
 basic_consume(Q, NoAck, ChPid,
               _LimiterPid, _LimiterActive, ConsumerPrefetchCount, ConsumerTag,
               ExclusiveConsume, Args, OkMsg, _ActingUser, QStates)
-  when ?amqqueue_type_is(Q, quorum) ->
+  when ?amqqueue_is_quorum(Q) ->
     {Name, _} = Id = amqqueue:get_pid(Q),
     QName = amqqueue:get_name(Q),
     ok = check_consume_arguments(QName, Args),
@@ -1129,7 +1117,7 @@ basic_consume(Q, NoAck, ChPid,
 
 basic_cancel(Q, ChPid, ConsumerTag, OkMsg, ActingUser,
              QState)
-  when ?amqqueue_type_is(Q, classic) ->
+  when ?amqqueue_is_classic(Q) ->
     QPid = amqqueue:get_pid(Q),
     case delegate:invoke(QPid, {gen_server2, call,
                            [{basic_cancel, ChPid, ConsumerTag, OkMsg, ActingUser},
@@ -1140,7 +1128,7 @@ basic_cancel(Q, ChPid, ConsumerTag, OkMsg, ActingUser,
     end;
 basic_cancel(Q, ChPid,
              ConsumerTag, OkMsg, _ActingUser, QStates)
-  when ?amqqueue_type_is(Q, quorum) ->
+  when ?amqqueue_is_quorum(Q) ->
     {Name, _} = Id = amqqueue:get_pid(Q),
     FState0 = get_quorum_state(Id, QStates),
     {ok, FState} = rabbit_quorum_queue:basic_cancel(ConsumerTag, ChPid, OkMsg, FState0),
@@ -1210,7 +1198,7 @@ forget_all_durable(Node) ->
                                            amqqueue:pattern_match_all(), write),
                   [forget_node_for_queue(Node, Q) ||
                       Q <- Qs,
-                      is_local_to_node(amqqueue:get_pid(Q), Node)],
+                      amqqueue:runs_on_node(Q, Node)],
                   ok
           end),
     ok.
@@ -1278,7 +1266,7 @@ cancel_sync_mirrors(Q) when ?is_amqqueue(Q) ->
 cancel_sync_mirrors(QPid) ->
     delegate:invoke(QPid, {gen_server2, call, [cancel_sync_mirrors, infinity]}).
 
-is_mirrored(Q) when ?amqqueue_type_is(Q, quorum) ->
+is_mirrored(Q) when ?amqqueue_is_quorum(Q) ->
     true;
 is_mirrored(Q) ->
     rabbit_mirror_queue_misc:is_mirrored(Q).
@@ -1364,7 +1352,7 @@ queues_to_delete_when_node_down(NodeDown) ->
     rabbit_misc:execute_mnesia_transaction(fun () ->
         qlc:e(qlc:q([amqqueue:get_name(Q) ||
             Q <- mnesia:table(rabbit_queue),
-                qnode(amqqueue:get_pid(Q)) == NodeDown andalso
+                amqqueue:runs_on_node(Q, NodeDown) andalso
                 not rabbit_mnesia:is_process_alive(amqqueue:get_pid(Q)) andalso
                 (not rabbit_amqqueue:is_mirrored(Q) orelse
                 rabbit_amqqueue:is_dead_exclusive(Q))]
@@ -1475,7 +1463,7 @@ deliver(Qs, Delivery = #delivery{flow = Flow,
     {QPids ++ QuorumPids, QueueState}.
 
 qpids([]) -> {[], [], []}; %% optimisation
-qpids([Q]) when ?amqqueue_type_is(Q, quorum) ->
+qpids([Q]) when ?amqqueue_is_quorum(Q) ->
     QName = amqqueue:get_name(Q),
     {LocalName, LeaderNode} = amqqueue:get_pid(Q),
     {[{{LocalName, LeaderNode}, QName}], [], []}; %% opt
@@ -1487,7 +1475,7 @@ qpids(Qs) ->
     {QuoPids, MPids, SPids} =
         lists:foldl(fun (Q,
                          {QuoPidAcc, MPidAcc, SPidAcc})
-                          when ?amqqueue_type_is(Q, quorum) ->
+                          when ?amqqueue_is_quorum(Q) ->
                             QPid = amqqueue:get_pid(Q),
                             QName = amqqueue:get_name(Q),
                             {[{QPid, QName} | QuoPidAcc], MPidAcc, SPidAcc};
