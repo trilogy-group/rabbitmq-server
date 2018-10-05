@@ -250,7 +250,7 @@ add_mirror(QName, MirrorNode, SyncMode) ->
             rabbit_misc:with_exit_handler(
               rabbit_misc:const(ok),
               fun () ->
-                    VHost = amqqueue:get_resource_vhost(Q),
+                    #resource{virtual_host = VHost} = amqqueue:get_name(Q),
                     case rabbit_vhost_sup_sup:get_vhost_sup(VHost, MirrorNode) of
                         {ok, _} ->
                             SPid = rabbit_amqqueue_sup_sup:start_queue_process(

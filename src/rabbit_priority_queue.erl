@@ -104,11 +104,13 @@ stop(VHost) ->
 %%----------------------------------------------------------------------------
 
 mutate_name(P, Q) when ?is_amqqueue(Q) ->
-    QNameBin0 = amqqueue:get_resource_name(Q),
+    Res0 = #resource{name = QNameBin0} = amqqueue:get_name(Q),
     QNameBin1 = mutate_name_bin(P, QNameBin0),
-    amqqueue:set_resource_name(Q, QNameBin1).
+    Res1 = Res0#resource{name = QNameBin1},
+    amqqueue:set_name(Q, Res1).
 
-mutate_name_bin(P, NameBin) -> <<NameBin/binary, 0, P:8>>.
+mutate_name_bin(P, NameBin) ->
+    <<NameBin/binary, 0, P:8>>.
 
 expand_queues(QNames) ->
     lists:unzip(

@@ -497,7 +497,6 @@ delete_member(Q, Node) when ?amqqueue_is_quorum(Q) ->
 dlx_mfa(Q) when ?is_amqqueue(Q) ->
     Resource = amqqueue:get_name(Q),
     #resource{virtual_host = VHost} = Resource,
-    VHost = amqqueue:get_resource_vhost(Q),
     DLX = init_dlx(args_policy_lookup(<<"dead-letter-exchange">>, fun res_arg/2, Q), Q),
     DLXRKey = args_policy_lookup(<<"dead-letter-routing-key">>, fun res_arg/2, Q),
     {?MODULE, dead_letter_publish, [VHost, DLX, DLXRKey, Resource]}.
