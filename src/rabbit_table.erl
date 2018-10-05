@@ -349,12 +349,12 @@ definitions() ->
        {match, #runtime_parameters{_='_'}}]},
      {rabbit_durable_queue,
       [{record_name, amqqueue},
-       {attributes, record_info(fields, amqqueue)},
+       {attributes, amqqueue:fields()},
        {disc_copies, [node()]},
        {match, amqqueue:pattern_match_on_name(queue_name_match())}]},
      {rabbit_queue,
       [{record_name, amqqueue},
-       {attributes, record_info(fields, amqqueue)},
+       {attributes, amqqueue:fields()},
        {match, amqqueue:pattern_match_on_name(queue_name_match())}]}]
         ++ gm:table_definitions()
         ++ mirrored_supervisor:table_definitions().
