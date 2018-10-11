@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+
+displayUsage() {
+      cat $BASEDIR/devspaces-cli.hlp 2>/dev/null || true
+}
+
+BASEDIR=$(dirname $(readlink -f $0))
+PROJECTDIR=$BASEDIR/..
+COMMAND="$1"
+
+pushd $BASEDIR
+
+case `awk '{print tolower($0)}' <<< "$COMMAND"` in
+	start)
+        cndevspaces collections create -f $BASEDIR/rabbitmq-collection.yaml
+        cd $PROJECTDIR
+        cndevspaces bind -C rabbitmq -c rabbitmq-cfg -v
+        cndevspaces info 
+        cd $BASEDIR
+	;;
+	build|create)
+        cndevspaces collections create -f $BASEDIR/rabbitmq-collection.yaml
+	;;
+	update)
+        cndevspaces collections update -f $BASEDIR/rabbitmq-collection.yaml
+	;;
+	up|bind)
+        cd $PROJECTDIR
+        cndevspaces bind -C rabbitmq -c rabbitmq-cfg -v
+        cd $BASEDIR
+	;;
+	exec)
+        cndevspaces exec -r rabbitmq-dev
+	;;
+	stop)
+        cndevspaces stop -C rabbitmq
+	;;
+	unbind)
+        cndevspaces unbind -C rabbitmq -c rabbitmq-cfg
+	;;
+	delete)
+        cndevspaces collections delete rabbitmq
+	;;
+	down)
+        cndevspaces unbind -C rabbitmq -c rabbitmq-cfg
+        cndevspaces collections delete rabbitmq
+	;;	
+	info)
+        cd $PROJECTDIR
+        cndevspaces info
+        cd $BASEDIR
+	;;	
+	*) displayUsage; exit 139
+	;;
+esac
